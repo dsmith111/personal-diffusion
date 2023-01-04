@@ -1,0 +1,33 @@
+# Stable Diffusion Packages
+albumentations==0.4.3
+opencv-python
+diffusers
+pudb==2019.2
+imageio==2.9.0
+imageio-ffmpeg==0.4.2
+pytorch-lightning==1.4.2
+torchmetrics==0.6
+omegaconf==2.1.1
+test-tube>=0.7.5
+einops==0.3.0
+transformers==4.19.2
+webdataset==0.2.5
+kornia==0.6
+realesrgan
+basicsr
+torch-fidelity==0.3.0
+pillow
+# open_clip_torch==2.0.2
+open-clip-torch==2.7.0
+git+https://github.com/openai/CLIP.git
+
+
+taming-transformers-rom1504
+
+# Worker packages
+celery==5.2.3
+flower==1.0.0
+redis==3.5.3
+watchdog==2.1.5
+eventlet
+pandas

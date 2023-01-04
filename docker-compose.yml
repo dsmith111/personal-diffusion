@@ -1,0 +1,37 @@
+version: "3.7"
+services:
+  web:
+    platform: linux/x86_64
+    restart: always
+    ports:
+     - "5001:5001"
+    depends_on:
+      - redis
+    volumes: ['./api:/api']
+    image: dsmith111/b-sd-api
+  worker:
+    platform: linux/x86_64
+    restart: always
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # count: 1
+              capabilities:
+                - gpu
+                - utility
+                - compute
+
+    command: celery -A tasks.celery worker --concurrency 1 --loglevel=info -P eventlet -E
+    environment:
+      CELERY_BROKER_URL: redis://redis
+      CELERY_RESULT_BACKEND: redis://redis
+    depends_on:
+      - redis
+    image: dsmith111/b-sd-celery-worker-gpu-optimized
+  redis:
+    image: redis:alpine
+    restart: always
+    ports:
+      - "6379:6379"

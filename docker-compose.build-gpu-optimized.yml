@@ -1,0 +1,60 @@
+version: "3.7"
+services:
+  web:
+    platform: linux/x86_64
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+     - "5001:5001"
+    depends_on:
+      - redis
+    volumes: ['./api:/api']
+    image: dsmith111/b-sd-api
+  worker:
+    platform: linux/x86_64
+    build:
+      context: ./celery-queue
+      dockerfile: Dockerfile.gpu-optimized
+    restart: always
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # count: 1
+              capabilities:
+                - gpu
+                - utility
+                - compute
+
+    command: celery -A tasks.celery worker --concurrency 1 --loglevel=info -P eventlet -E
+    environment:
+      CELERY_BROKER_URL: redis://redis
+      CELERY_RESULT_BACKEND: redis://redis
+    depends_on:
+      - redis
+    # volumes: ['./celery-queue:/queue']
+    image: dsmith111/b-sd-celery-worker-gpu-optimized
+  # monitor:
+  #   platform: linux/x86_64
+  #   build:
+  #     context: ./celery-queue
+  #     dockerfile: Dockerfile.gpu
+  #   ports:
+  #    - "5555:5555"
+  #   command:  ['celery', 'flower', '-A', 'tasks']
+  #   environment:
+  #     CELERY_BROKER_URL: redis://redis:6379/0
+  #     CELERY_RESULT_BACKEND: redis://redis:6379/0
+  #   depends_on:
+  #     - redis
+  #     - worker
+  #   # volumes: ['./celery-queue:/queue']
+  #   image: dsmith111/b-sd-celery-monitor
+  redis:
+    image: redis:alpine
+    restart: always
+    ports:
+      - "6379:6379"

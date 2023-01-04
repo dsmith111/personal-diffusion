@@ -1,0 +1,57 @@
+FROM nvidia/cuda:11.4.0-base-ubuntu20.04
+
+ENV CELERY_BROKER_URL redis://redis:6379/0
+ENV CELERY_RESULT_BACKEND redis://redis:6379/0
+ENV C_FORCE_ROOT true
+ENV NVIDIA_VISIBLE_DEVICES all
+ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
+ARG DEBIAN_FRONTEND=noninteractive
+# ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
+
+RUN apt update && \
+apt install --no-install-recommends -y build-essential gcc curl ca-certificates python3.8 && \
+apt clean && rm -rf /var/lib/apt/lists/*
+
+RUN apt -y update && apt install -y wget nano git build-essential yasm pkg-config
+
+# Install conda and cudatoolkit
+ENV PATH="/root/miniconda3/bin:${PATH}"
+ARG PATH="/root/miniconda3/bin:${PATH}"
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh \
+    && mkdir /root/.conda \
+    && bash Miniconda3-latest-Linux-x86_64.sh -b \
+    && rm -f Miniconda3-latest-Linux-x86_64.sh \
+	&& echo "Running $(conda --version)" && \
+    conda init bash && \
+    . /root/.bashrc && \
+    	conda update conda
+RUN conda install -c conda-forge -c pytorch cudatoolkit=11.3 pytorch=1.11.0 torchvision=0.12.0 pip=20.3 numpy=1.19.2
+
+# Compile and install ffmpeg from source
+RUN git clone https://github.com/FFmpeg/FFmpeg /root/ffmpeg && \
+    cd /root/ffmpeg && \
+    ./configure --enable-nonfree --disable-shared --extra-cflags=-I/usr/local/include && \
+    make -j8 && make install -j8
+
+RUN apt install ffmpeg libsm6 libxext6  -y
+RUN pip install -U setuptools pip
+
+ADD ./requirements-gpu.txt /queue/requirements-gpu.txt
+RUN pip install -r /queue/requirements-gpu.txt
+COPY . /queue
+WORKDIR /queue
+
+# Install Standard GPU version of Stable Diffusion
+RUN git clone https://github.com/CompVis/stable-diffusion.git /queue/stable-diffusion-repo
+
+# Modify Repo
+RUN rm ./stable-diffusion-repo/scripts/txt2img.py \
+    && cp ./sd-mod-files/txt2img.py ./stable-diffusion-repo/scripts/txt2img.py
+
+RUN echo "" >> ./stable-diffusion-repo/scripts/__init__.py \
+    && echo "" >> ./stable-diffusion-repo/ldm/__init__.py
+
+# Install Models (Use local for now)
+RUN wget https://files.stablediffusionhub.com/model/sd-v1-4.ckpt -O ./model.ckpt
+RUN mkdir ./stable-diffusion-repo/models/ldm/stable-diffusion-v1
+RUN mv /queue/model.ckpt /queue/stable-diffusion-repo/models/ldm/stable-diffusion-v1/model.ckpt

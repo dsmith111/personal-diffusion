@@ -1,0 +1,108 @@
+FROM nvidia/cuda:11.7.0-devel-ubuntu20.04
+
+ENV CELERY_BROKER_URL redis://redis:6379/0
+ENV CELERY_RESULT_BACKEND redis://redis:6379/0
+ENV C_FORCE_ROOT true
+ENV NVIDIA_VISIBLE_DEVICES all
+ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
+ARG DEBIAN_FRONTEND=noninteractive
+
+# ENV PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
+
+RUN apt update && \
+apt install --no-install-recommends -y build-essential gcc curl      ca-certificates python3.8 && \
+apt clean && rm -rf /var/lib/apt/lists/*
+
+RUN apt -y update && apt install -y wget nano git build-essential yasm pkg-config
+# Compile and install ffmpeg from source
+RUN git clone https://github.com/FFmpeg/FFmpeg /root/ffmpeg && \
+    cd /root/ffmpeg && \
+    ./configure --enable-nonfree --disable-shared --extra-cflags=-I/usr/local/include && \
+    make -j8 && make install -j8
+
+RUN apt install ffmpeg libsm6 libxext6  -y
+   
+# Install conda and cudatoolkit
+ENV PATH="/root/miniconda3/bin:${PATH}"
+ARG PATH="/root/miniconda3/bin:${PATH}"
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-py38_4.12.0-Linux-x86_64.sh \
+    && mkdir /root/.conda \
+    && bash Miniconda3-py38_4.12.0-Linux-x86_64.sh -b \
+    && rm -f Miniconda3-py38_4.12.0-Linux-x86_64.sh \
+	&& echo "Running $(conda --version)" && \
+    conda init bash && \
+    . /root/.bashrc && \
+    	conda update conda
+
+
+
+ENV CUDA_HOME /usr/local/cuda
+ARG CUDA_HOME=/usr/local/cuda
+
+RUN conda install pytorch=1.12.1=py3.8_cuda11.3_cudnn8.3.2_0 torchvision=0.13.1=py38_cu113 -c pytorch
+RUN conda install -c nvidia/label/cuda-11.3.1 cuda-nvcc
+RUN conda install -c conda-forge gcc gxx_linux-64=9.5.0
+
+ENV FORCE_CUDA "1"
+ENV TORCH_CUDA_ARCH_LIST 7.5
+ENV CUDA_VISIBLE_DEVICES 0
+ARG FORCE_CUDA="1"
+ARG TORCH_CUDA_ARCH_LIST=7.5
+ARG CUDA_VISIBLE_DEVICES=0
+
+# Install xformer
+RUN git clone https://github.com/facebookresearch/xformers.git \
+    && cd xformers \
+    && git submodule update --init --recursive \
+    && pip install -r requirements.txt \
+    && pip install -e . --verbose
+
+ADD ./requirements-gpu.txt /queue/requirements-gpu.txt
+RUN pip install -r /queue/requirements-gpu.txt
+RUN pip install git+https://github.com/brkirch/k-diffusion.git
+
+ADD . /queue
+WORKDIR /queue
+RUN pip install -U setuptools pip
+
+# Install Optimized GPU version of Stable Diffusion
+RUN git clone https://github.com/basujindal/stable-diffusion.git /queue/stable-diffusion-repo
+
+# Modify with custom GPU optimized scripts
+RUN cp -a ./stable-diffusion-repo/optimizedSD/. ./stable-diffusion-repo/scripts \
+    && rm ./stable-diffusion-repo/scripts/txt2img.py \
+    && rm ./stable-diffusion-repo/scripts/img2img.py \
+    && rm -r ./stable-diffusion-repo/optimizedSD \
+    && rm -r ./stable-diffusion-repo/scripts/v1-inference.yaml \
+    && rm -r ./stable-diffusion-repo/scripts/openaimodelSplit.py \
+    && cp ./sd-mod-files/txt2img-gpu-optimized.py ./stable-diffusion-repo/scripts/txt2img.py \
+    && cp ./sd-mod-files/sdv1/ddpm-gpu.py ./stable-diffusion-repo/scripts/ddpm.py \
+    && cp ./sd-mod-files/sdv1/v1-inference-optimized.yaml ./stable-diffusion-repo/scripts/v1-inference.yaml \
+    && cp ./sd-mod-files/sdv1/openaimodelSplit.py ./stable-diffusion-repo/scripts/openaimodelSplit.py
+
+# Copy over SDv2 files
+RUN cp -r ./sd-mod-files/sdv2/ldmv2 ./stable-diffusion-repo/ldm/ \
+    && cp ./sd-mod-files/sdv2/img2imgv2.py ./stable-diffusion-repo/scripts/img2imgv2.py \
+    && cp ./sd-mod-files/sdv2/txt2imgv2.py ./stable-diffusion-repo/scripts/txt2imgv2.py \
+    && cp ./sd-mod-files/sdv2/v2-inference.yaml ./stable-diffusion-repo/scripts/v2-inference.yaml \
+    && cp ./sd-mod-files/sdv2/v2-inference-v.yaml ./stable-diffusion-repo/scripts/v2-inference-v.yaml
+
+RUN echo "" >> ./stable-diffusion-repo/scripts/__init__.py \
+    && echo "" >> ./stable-diffusion-repo/ldm/__init__.py
+
+# Install Models (Comment out and install model as model.ckpt in the celery directory for faster builds)
+RUN wget https://files.stablediffusionhub.com/model/sd-v1-4.ckpt -O ./models/model.ckpt
+# RUN wget https://huggingface.co/stabilityai/stable-diffusion-2/resolve/main/768-v-ema.ckpt -O ./models/model2v.ckpt
+RUN wget https://huggingface.co/runwayml/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.ckpt -O ./models/model15.ckpt
+RUN wget https://huggingface.co/stabilityai/stable-diffusion-2-base/resolve/main/512-base-ema.ckpt -O ./models/model2.ckpt
+RUN mkdir ./stable-diffusion-repo/models/ldm/stable-diffusion
+RUN mv /queue/models/* /queue/stable-diffusion-repo/models/ldm/stable-diffusion/
+RUN pip install --upgrade git+https://github.com/huggingface/diffusers.git transformers accelerate scipy
+
+# Copy over denoiser values
+RUN wget https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth -O ./stable-diffusion-repo/scripts/real2x.pth
+RUN cp ./sd-mod-files/img2img.py ./stable-diffusion-repo/scripts/img2img.py
+RUN cp ./sd-mod-files/sdv1/esrgan_model_arch.py ./stable-diffusion-repo/scripts/esrgan_model_arch.py
+RUN cp ./sd-mod-files/sdv1/esrgan_utils.py ./stable-diffusion-repo/scripts/esrgan_utils.py
+RUN cp ./sd-mod-files/sdv1/processingUtils.py ./stable-diffusion-repo/scripts/processingUtils.py
+# RUN pip install -e git+https://github.com/brkirch/k-diffusion.git

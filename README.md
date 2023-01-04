@@ -1,4 +1,4 @@
-# Unstable Diffusion Dockerized Tool
+# Stable Diffusion Dockerized Tool
 
 A custom tool utilizing the stable diffusion repository with swappable models. This tool is managed and exposed to public use via an API and scheduler implemented through Celery, Redis and Flask. These systems are then managed by docker compose allowing quick and easy install to any system.
 
